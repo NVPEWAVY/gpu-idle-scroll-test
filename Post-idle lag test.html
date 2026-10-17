@@ -1,0 +1,1102 @@
+<!doctype html><html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover"><style>:root{color-scheme:light;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}html{scroll-padding-top:env(safe-area-inset-top,0px)}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#fff;color:#000}img{max-width:100%}[hidden]:not([hidden=until-found i]){display:none!important}</style></head><body>
+<svg width="0" height="0" aria-hidden="true" focusable="false" style="position:absolute;width:0;height:0;overflow:hidden">
+  <defs>
+    <filter id="warp" x="-15%" y="-15%" width="130%" height="130%" color-interpolation-filters="sRGB">
+      <feTurbulence type="fractalNoise" baseFrequency="0.012 0.018" numOctaves="3" seed="7" result="noise"/>
+      <feDisplacementMap in="SourceGraphic" in2="noise" scale="24" xChannelSelector="R" yChannelSelector="G" result="disp"/>
+      <feGaussianBlur in="disp" stdDeviation="1.2"/>
+    </filter>
+  </defs>
+</svg>
+<title>Post-idle lag test</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=Sofia+Sans+Extra+Condensed:wght@700;800&display=swap">
+<style>
+/* Layout: one narrow instrument column. Sticky status strip, settings, readout (table + frame charts), comparison across graphics cards, then the heavy test stage at the bottom that scrolls by itself. */
+:root {
+  --bg: #E5EAE8;
+  --panel: #F5F8F7;
+  --ink: #14201E;
+  --muted: #4F615E;
+  --line: #C2CCC9;
+  --accent: #0B6B62;
+  --accent-ink: #FFFFFF;
+  --go: #A85F00;
+  --go-bg: #FFE9BD;
+  --ok: #1B7A3E;
+  --bad: #B3261E;
+  --bad-bg: #FBE1DE;
+  --blue: #2B5FA8;
+  --f-display: "Sofia Sans Extra Condensed", "Arial Narrow", "Roboto Condensed", sans-serif;
+  --f-body: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+  --f-mono: "IBM Plex Mono", Consolas, "Courier New", monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0E1415;
+    --panel: #162021;
+    --ink: #DFE9E6;
+    --muted: #91A39F;
+    --line: #2A3938;
+    --accent: #52C7B6;
+    --accent-ink: #06201C;
+    --go: #F2B544;
+    --go-bg: #3A2B0A;
+    --ok: #5CCB86;
+    --bad: #FF8F85;
+    --bad-bg: #3B1C1A;
+    --blue: #7FB0F0;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0E1415;
+  --panel: #162021;
+  --ink: #DFE9E6;
+  --muted: #91A39F;
+  --line: #2A3938;
+  --accent: #52C7B6;
+  --accent-ink: #06201C;
+  --go: #F2B544;
+  --go-bg: #3A2B0A;
+  --ok: #5CCB86;
+  --bad: #FF8F85;
+  --bad-bg: #3B1C1A;
+  --blue: #7FB0F0;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+body {
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--f-body);
+  font-size: 15px;
+  line-height: 1.5;
+  padding-block: 20px 48px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+}
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0 0 auto;
+  height: env(safe-area-inset-top, 0px);
+  z-index: 30;
+  background: var(--bg);
+}
+.wrap { max-width: 920px; margin-inline: auto; display: flex; flex-direction: column; gap: 28px; }
+h1, h2, h3 { font-family: var(--f-display); font-weight: 800; letter-spacing: 0.01em; line-height: 1.02; margin: 0; text-wrap: balance; }
+h1 { font-size: clamp(38px, 8vw, 62px); }
+h2 { font-size: clamp(26px, 4.5vw, 32px); }
+h3 { font-size: 20px; }
+p { margin: 0; }
+.lead { max-width: 64ch; color: var(--muted); font-size: 16px; }
+.kicker { font-family: var(--f-mono); font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+header { display: flex; flex-direction: column; gap: 10px; }
+.msg { font-size: 13px; color: var(--muted); }
+
+.status {
+  position: sticky;
+  top: env(safe-area-inset-top, 0px);
+  z-index: 20;
+  background: var(--panel);
+  border: 2px solid var(--line);
+  border-radius: 6px;
+  padding: 12px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.status .label { font-family: var(--f-display); font-weight: 800; font-size: clamp(24px, 5.5vw, 34px); line-height: 1.05; text-wrap: balance; }
+.status .hint { font-size: 14px; color: var(--muted); min-height: 1.5em; }
+.status[data-state="wait"] { border-color: var(--accent); }
+.status[data-state="wait"] .label { color: var(--accent); }
+.status[data-state="warn"] { background: var(--bad-bg); border-color: var(--bad); }
+.status[data-state="warn"] .label { color: var(--bad); }
+.status[data-state="done"] .label { color: var(--ok); }
+
+section.block { display: flex; flex-direction: column; gap: 14px; }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 16px; }
+.controls { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 14px 16px; align-items: start; }
+.field { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.field label { font-size: 13px; color: var(--muted); }
+.field.wide { grid-column: 1 / -1; }
+select, input[type="text"] {
+  font: inherit;
+  color: var(--ink);
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 8px 10px;
+  min-height: 40px;
+  width: 100%;
+}
+input[type="text"] { font-family: var(--f-mono); }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
+button.chip { min-height: 32px; padding: 0 12px; font-size: 13px; font-family: var(--f-mono); font-weight: 500; background: transparent; color: var(--ink); border: 1px solid var(--line); }
+button.chip:hover { border-color: var(--accent); color: var(--accent); }
+.btns { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 16px; align-items: center; }
+button {
+  font: inherit;
+  font-weight: 600;
+  min-height: 44px;
+  padding: 0 18px;
+  border-radius: 4px;
+  border: 1px solid var(--accent);
+  background: var(--accent);
+  color: var(--accent-ink);
+  cursor: pointer;
+}
+button.alt { background: transparent; color: var(--accent); }
+button.quiet { background: transparent; color: var(--ink); border-color: var(--line); }
+button.mini { min-height: 30px; padding: 0 10px; font-size: 12px; }
+button:disabled, select:disabled, input:disabled { opacity: 0.45; cursor: not-allowed; }
+button:focus-visible, select:focus-visible, input:focus-visible, textarea:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+
+.verdict { border: 1px solid var(--line); border-radius: 6px; padding: 14px 16px; background: var(--panel); }
+.verdict strong { font-family: var(--f-display); font-size: 26px; font-weight: 800; display: block; line-height: 1.1; margin-bottom: 4px; }
+.verdict[data-tone="bad"] { border-color: var(--bad); background: var(--bad-bg); }
+.verdict[data-tone="bad"] strong { color: var(--bad); }
+.verdict[data-tone="warn"] { border-color: var(--go); background: var(--go-bg); }
+.verdict[data-tone="warn"] strong { color: var(--go); }
+.verdict[data-tone="ok"] strong { color: var(--ok); }
+.scroller { overflow-x: auto; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); }
+table { border-collapse: collapse; width: 100%; font-size: 13px; }
+table.wide { min-width: 760px; }
+th, td { padding: 8px 10px; text-align: right; border-bottom: 1px solid var(--line); white-space: nowrap; }
+th:first-child, td:first-child { text-align: left; }
+th { font-weight: 600; color: var(--muted); font-size: 12px; }
+td.num { font-family: var(--f-mono); font-variant-numeric: tabular-nums; }
+tr:last-child td { border-bottom: 0; }
+td.bad { color: var(--bad); font-weight: 600; }
+td.bad::after { content: " \25B2"; font-size: 10px; }
+td.warnc { color: var(--go); font-weight: 600; }
+td.na { color: var(--muted); }
+td.label-cell { white-space: normal; min-width: 220px; }
+td.label-cell small { display: block; color: var(--muted); font-size: 12px; }
+.empty-cell { text-align: left !important; color: var(--muted); white-space: normal; padding: 16px !important; }
+.chartbox { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 12px; display: flex; flex-direction: column; gap: 6px; }
+.chartbox canvas { display: block; max-width: 100%; }
+.chartbox .cap { font-size: 13px; color: var(--muted); }
+dl.gloss { display: grid; grid-template-columns: max-content 1fr; gap: 6px 14px; margin: 0; font-size: 14px; }
+dl.gloss dt { font-family: var(--f-mono); font-size: 12px; color: var(--muted); padding-top: 2px; }
+dl.gloss dd { margin: 0; min-width: 0; }
+dl.env { display: grid; grid-template-columns: max-content 1fr; gap: 4px 14px; margin: 0; font-size: 13px; }
+dl.env dt { color: var(--muted); }
+dl.env dd { margin: 0; font-family: var(--f-mono); overflow-wrap: anywhere; min-width: 0; }
+textarea {
+  width: 100%;
+  min-height: 150px;
+  font-family: var(--f-mono);
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--ink);
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 10px;
+  resize: vertical;
+}
+pre.cmd { margin: 0; padding: 12px; overflow-x: auto; background: var(--bg); border: 1px solid var(--line); border-radius: 4px; font-family: var(--f-mono); font-size: 12.5px; }
+.row-actions { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+.stack { display: flex; flex-direction: column; gap: 12px; }
+
+/* Test stage: deliberately heavy, always dark so it looks the same in both themes */
+#stageWrap { border: 1px solid var(--line); border-radius: 6px; overflow: clip; background: #0F1A21; }
+.stage-head { padding: 14px 16px; background: var(--panel); border-bottom: 1px solid var(--line); }
+.stage-head h2 { font-size: 26px; }
+.stage { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 14px; padding: 14px; background: linear-gradient(160deg, #13232C, #1A1530 55%, #0F2A26); }
+.card {
+  position: relative;
+  height: 220px;
+  border-radius: 14px;
+  overflow: hidden;
+  background: linear-gradient(135deg, hsl(var(--h) 70% 46%), hsl(calc(var(--h) + 70) 72% 28%));
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.4);
+  color: #fff;
+}
+.card canvas { position: absolute; left: 0; right: 0; bottom: 0; width: 100%; height: 96px; opacity: 0.9; }
+.card .glass { position: absolute; left: 12px; right: 12px; top: 14px; padding: 10px 12px; border-radius: 10px; background: rgba(255, 255, 255, 0.14); display: flex; flex-direction: column; gap: 2px; font-family: var(--f-mono); font-size: 12px; }
+.card .glass b { font-family: var(--f-display); font-size: 22px; font-weight: 800; }
+.card .blob { display: none; position: absolute; width: 120px; height: 120px; border-radius: 50%; background: hsl(calc(var(--h) + 150) 90% 60%); }
+.card .b1 { left: -30px; top: 60px; }
+.card .b2 { right: -20px; top: 20px; }
+.lvl2 .card .glass { backdrop-filter: blur(10px) saturate(1.5); }
+.lvl3 .card { filter: drop-shadow(0 8px 12px rgba(0, 0, 0, 0.45)); }
+.lvl3 .card:nth-child(3n) { will-change: transform; }
+.lvl3 .card .blob { display: block; filter: blur(18px); mix-blend-mode: screen; opacity: 0.7; }
+.lvl3 .card .glass { backdrop-filter: blur(16px) saturate(1.7); }
+
+/* --- Level 4: extreme GPU load (heavy blurs, SVG displacement, blended layers) --- */
+.lvl4.stage {
+  background:
+    conic-gradient(from 90deg at 15% 20%, rgba(10, 30, 60, 0.7), rgba(120, 40, 100, 0.55), rgba(10, 60, 40, 0.7), rgba(10, 30, 60, 0.7)),
+    radial-gradient(circle at 85% 80%, rgba(180, 70, 60, 0.5), rgba(20, 20, 40, 0.85) 60%);
+  background-blend-mode: screen;
+}
+.lvl4 .card {
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.6), 0 0 32px hsl(var(--h) 90% 60% / 0.4), inset 0 0 24px rgba(255, 255, 255, 0.08);
+}
+.lvl4 .card::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(circle at 28% 32%, hsl(calc(var(--h) + 25) 95% 60% / 0.8), transparent 55%),
+    radial-gradient(circle at 72% 68%, hsl(calc(var(--h) + 200) 95% 55% / 0.75), transparent 60%);
+  filter: url(#warp) blur(2px);
+  mix-blend-mode: overlay;
+  opacity: 0.65;
+  pointer-events: none;
+}
+.lvl4 .card .blob {
+  display: block;
+  width: 240px;
+  height: 240px;
+  filter: blur(36px) saturate(2);
+  mix-blend-mode: screen;
+  opacity: 0.9;
+}
+.lvl4 .card .b1 { left: -80px; top: -50px; }
+.lvl4 .card .b2 { right: -80px; top: 20px; }
+.lvl4 .card .b3 { left: 30px; bottom: -90px; width: 200px; height: 200px; }
+.lvl4 .card .glass {
+  backdrop-filter: blur(26px) saturate(2.2) brightness(1.1) contrast(1.2);
+  box-shadow: 0 0 40px hsl(var(--h) 90% 60% / 0.55), inset 0 0 30px rgba(255, 255, 255, 0.12);
+}
+
+@media (max-width: 520px) {
+  dl.gloss { grid-template-columns: 1fr; gap: 0; }
+  dl.gloss dd { margin-bottom: 8px; }
+}
+@media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; } }
+</style>
+
+<div class="wrap">
+  <header>
+    <p class="kicker">PCIe 1.1 → 3.0 · auto-scroll</p>
+    <h1>Post-idle lag test</h1>
+    <p class="lead">The page waits for the chosen delay, then scrolls a heavy fragment by itself and measures every frame. The «cold» pass comes right after waking up, followed by a «warm» pass as a control. Run it on an old and a new graphics card at different delays and compare.</p>
+  </header>
+
+  <div class="status" id="status" data-state="ready" aria-live="polite">
+    <div class="label" id="stateLabel">Ready to run</div>
+    <div class="hint" id="stateHint">Configure the test below and press «Run».</div>
+  </div>
+
+  <section class="block">
+    <h2>Settings</h2>
+    <div class="panel">
+      <div class="controls">
+        <div class="field">
+          <label for="cfgLabel">Configuration name (for comparison)</label>
+          <input type="text" id="cfgLabel" list="labelList" value="RTX 3060" autocomplete="off">
+          <datalist id="labelList"><option value="GTX 960"><option value="RTX 3060"></datalist>
+        </div>
+        <div class="field">
+          <label for="cfgDelay">Delay before start, s (a list is allowed)</label>
+          <input type="text" id="cfgDelay" value="10" inputmode="numeric" autocomplete="off">
+          <div class="chips" id="delayChips">
+            <button type="button" class="chip" data-v="3">3</button>
+            <button type="button" class="chip" data-v="5">5</button>
+            <button type="button" class="chip" data-v="10">10</button>
+            <button type="button" class="chip" data-v="20">20</button>
+            <button type="button" class="chip" data-v="30">30</button>
+            <button type="button" class="chip" data-v="45">45</button>
+            <button type="button" class="chip" data-v="3,5,10,20,30">ladder 3…30</button>
+          </div>
+        </div>
+        <div class="field">
+          <label for="cfgLevel">Fragment heaviness</label>
+          <select id="cfgLevel">
+            <option value="1">Light: gradients and shadows</option>
+            <option value="2" selected>Medium: + glass blur</option>
+            <option value="3">Heavy: + layers and blending</option>
+            <option value="4">Extreme: crazy blurs, SVG filter, blending</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="cfgDur">Duration of each pass</label>
+          <select id="cfgDur">
+            <option value="2">2 seconds</option>
+            <option value="3" selected>3 seconds</option>
+            <option value="5">5 seconds</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="cfgSpeed">Scroll speed</label>
+          <select id="cfgSpeed">
+            <option value="800">800 px/s</option>
+            <option value="1500" selected>1500 px/s</option>
+            <option value="2500">2500 px/s</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="cfgReps">Repeats per delay</label>
+          <select id="cfgReps">
+            <option value="1">1</option>
+            <option value="3" selected>3</option>
+            <option value="5">5</option>
+          </select>
+        </div>
+      </div>
+      <div class="btns">
+        <button id="btnStart" type="button">Run</button>
+        <button id="btnStop" type="button" class="quiet" disabled>Stop</button>
+        <span class="msg" id="estimate"></span>
+      </div>
+      <p class="msg" style="margin-top:12px">During the test, don't touch the mouse, wheel or keyboard and don't switch tabs. If that happens, the run will be marked as invalid.</p>
+    </div>
+  </section>
+
+  <section class="block">
+    <h2>Last run</h2>
+    <div class="verdict" id="verdict" data-tone="neutral"></div>
+    <div class="scroller"><table id="cmp" aria-label="Cold and warm pass"></table></div>
+    <div class="chartbox">
+      <h3>Each frame over time</h3>
+      <canvas id="cvTimeline" aria-label="Frame interval chart"></canvas>
+      <p class="cap" id="capTimeline"></p>
+    </div>
+    <div class="chartbox">
+      <h3>First 600 ms after scroll start</h3>
+      <canvas id="cvZoom" aria-label="First 600 ms of the cold and warm pass"></canvas>
+      <p class="cap">Same scale. Tall bars in the left panel that are absent on the right — that's the wake-up cost.</p>
+    </div>
+    <div class="panel">
+      <dl class="gloss">
+        <dt>Wake</dt><dd>Time from when the test issued the scroll command to the first frame. At 60 Hz the norm is 17–35 ms.</dd>
+        <dt>Stable after</dt><dd>After how many ms the frames become steady (15 in a row no longer than 1.5 frames).</dd>
+        <dt>Extra time, 600 ms</dt><dd>Sum of all «extra» ms over a normal frame during the first 600 ms. Noticeable from 15 ms, dramatic from 60 ms.</dd>
+        <dt>Dropped frames</dt><dd>How many frames were not shown on time (estimated from the interval lengths).</dd>
+        <dt>The rest</dt><dd>In the worst frame: how much the browser main thread took (per LoAF) and how much remained outside it — GPU, compositor, driver, vsync. This is an estimate, not a direct measurement, and requires Chrome or Edge.</dd>
+      </dl>
+    </div>
+  </section>
+
+  <section class="block">
+    <h2>Configuration comparison</h2>
+    <div class="chartbox">
+      <h3>Loss vs delay</h3>
+      <canvas id="cvLadder" aria-label="Loss as a function of delay"></canvas>
+      <p class="cap">Lower is better. An old card holds the high mode longer, so its line should drop to zero at a shorter delay than the new one.</p>
+    </div>
+    <div class="scroller"><table class="wide" id="groups" aria-label="Summary by configuration"></table></div>
+  </section>
+
+  <section class="block">
+    <h2>All runs</h2>
+    <div class="scroller">
+      <table class="wide" aria-label="All runs">
+        <thead>
+          <tr>
+            <th>#</th><th>Configuration</th><th>Delay</th><th>Scroll start</th>
+            <th>Wake, ms</th><th>Loss, ms</th><th>Max frame, ms</th><th></th>
+          </tr>
+        </thead>
+        <tbody id="history"></tbody>
+      </table>
+    </div>
+    <div class="row-actions">
+      <button id="btnClear" type="button" class="quiet">Clear history</button>
+      <span class="msg" id="lsNote"></span>
+    </div>
+  </section>
+
+  <section class="block">
+    <h2>Report for NVIDIA</h2>
+    <div class="panel stack">
+      <textarea id="report" readonly aria-label="Report text"></textarea>
+      <div class="row-actions">
+        <button id="btnCopy" type="button">Copy report</button>
+        <span class="msg" id="copyMsg"></span>
+      </div>
+    </div>
+    <div class="panel stack">
+      <p><strong>To see what the card is doing at the moment of lag.</strong> Start this in PowerShell before the test and don't close it until the end:</p>
+      <pre class="cmd" id="cmdText">nvidia-smi --query-gpu=timestamp,pstate,pcie.link.gen.current,clocks.gr,clocks.mem,power.draw,utilization.gpu --format=csv -lms 100 -f idle-log.csv</pre>
+      <div class="row-actions">
+        <button id="btnCmd" type="button" class="alt">Copy command</button>
+        <span class="msg" id="cmdMsg"></span>
+      </div>
+      <p>The «Scroll start» time in the table has the same format as the timestamp in the log. Find that moment in the file and look at pstate, pcie.link.gen.current and clocks: that shows when the card was raising clocks and PCIe.</p>
+    </div>
+    <div class="panel"><dl class="env" id="env"></dl></div>
+  </section>
+
+  <section id="stageWrap" aria-label="Test fragment">
+    <div class="stage-head">
+      <h2>Test fragment</h2>
+      <p class="msg">During the test, this area stays on screen and then scrolls itself. No need to scroll it manually.</p>
+    </div>
+    <div class="stage lvl2" id="stage"></div>
+  </section>
+</div>
+
+<script>
+(function () {
+  'use strict';
+  var $ = function (id) { return document.getElementById(id); };
+  var els = {
+    status: $('status'), stateLabel: $('stateLabel'), stateHint: $('stateHint'),
+    label: $('cfgLabel'), delay: $('cfgDelay'), level: $('cfgLevel'), dur: $('cfgDur'), speed: $('cfgSpeed'), reps: $('cfgReps'),
+    btnStart: $('btnStart'), btnStop: $('btnStop'), estimate: $('estimate'), delayChips: $('delayChips'),
+    verdict: $('verdict'), cmp: $('cmp'), cvTimeline: $('cvTimeline'), capTimeline: $('capTimeline'), cvZoom: $('cvZoom'),
+    cvLadder: $('cvLadder'), groups: $('groups'), history: $('history'), btnClear: $('btnClear'), lsNote: $('lsNote'),
+    report: $('report'), btnCopy: $('btnCopy'), copyMsg: $('copyMsg'), btnCmd: $('btnCmd'), cmdMsg: $('cmdMsg'), cmdText: $('cmdText'),
+    env: $('env'), stage: $('stage'), stageWrap: $('stageWrap')
+  };
+
+  var LS_KEY = 'gpu-idle-bench-v1';
+  var running = false, stopFlag = false, abortFns = [], ignoreUntil = 0;
+  var lsOk = true, history = [], selectedId = null;
+  var env = { gpu: '…' };
+
+  /* ---------- helpers ---------- */
+  function pad(n, w) { n = String(n); while (n.length < (w || 2)) n = '0' + n; return n; }
+  function fmtWall(ms) {
+    var d = new Date(ms);
+    return d.getFullYear() + '/' + pad(d.getMonth() + 1) + '/' + pad(d.getDate()) + ' ' +
+      pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds()) + '.' + pad(d.getMilliseconds(), 3);
+  }
+  function esc(s) { return String(s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
+  function median(a) {
+    var v = a.filter(function (x) { return x != null && isFinite(x); }).sort(function (x, y) { return x - y; });
+    if (!v.length) return null;
+    var m = Math.floor(v.length / 2);
+    return v.length % 2 ? v[m] : (v[m - 1] + v[m]) / 2;
+  }
+  function pct(a, p) {
+    if (!a.length) return null;
+    var v = a.slice().sort(function (x, y) { return x - y; });
+    return v[Math.min(v.length - 1, Math.floor(p * v.length))];
+  }
+  function f(v, d) { return v == null || !isFinite(v) ? '–' : v.toFixed(d || 0); }
+  function r1(v) { return Math.round(v * 10) / 10; }
+  function removeFrom(list, fn) { var i = list.indexOf(fn); if (i >= 0) list.splice(i, 1); }
+  function setState(state, label, hint) {
+    els.status.dataset.state = state;
+    els.stateLabel.textContent = label;
+    els.stateHint.textContent = hint || '';
+  }
+  function sleep(ms) {
+    return new Promise(function (res) {
+      var t = setTimeout(function () { removeFrom(abortFns, abort); res(true); }, ms);
+      function abort() { clearTimeout(t); res(false); }
+      abortFns.push(abort);
+    });
+  }
+  function cssv(n) { return getComputedStyle(document.documentElement).getPropertyValue(n).trim(); }
+
+  /* ---------- storage ---------- */
+  function loadHistory() {
+    try { var s = localStorage.getItem(LS_KEY); return s ? JSON.parse(s) : []; } catch (e) { lsOk = false; return []; }
+  }
+  function saveHistory() {
+    try { localStorage.setItem(LS_KEY, JSON.stringify(history)); } catch (e) { lsOk = false; }
+    els.lsNote.textContent = lsOk ? 'History is stored in this browser, so it stays after a restart.' : 'The browser won\'t let us store history: the data lives only while this page is open.';
+  }
+
+  /* ---------- idle wait ---------- */
+  function idleWait(ms) {
+    return new Promise(function (res) {
+      var done = false;
+      var evs = ['wheel', 'keydown', 'touchstart', 'touchmove', 'scroll'];
+      var t = setTimeout(function () { finish('ok'); }, ms);
+      function onAct() { if (performance.now() < ignoreUntil) return; finish('interrupted'); }
+      function abort() { finish('cancelled'); }
+      function finish(v) {
+        if (done) return; done = true;
+        clearTimeout(t);
+        evs.forEach(function (n) { window.removeEventListener(n, onAct, true); });
+        removeFrom(abortFns, abort);
+        res(v);
+      }
+      evs.forEach(function (n) { window.addEventListener(n, onAct, { passive: true, capture: true }); });
+      abortFns.push(abort);
+    });
+  }
+
+  /* ---------- heavy stage ---------- */
+  var ROWH = 234;
+  function buildStage(level, need) {
+    var grid = els.stage;
+    grid.className = 'stage lvl' + level;
+    grid.innerHTML = '';
+    var probe = document.createElement('div'); probe.className = 'card'; grid.appendChild(probe);
+    var cols = getComputedStyle(grid).gridTemplateColumns.split(' ').length || 1;
+    grid.innerHTML = '';
+    var rows = Math.ceil(need / ROWH);
+    var count = Math.min(1500, rows * cols);
+
+    var src = document.createElement('canvas'); src.width = 192; src.height = 72;
+    var sc = src.getContext('2d');
+    var seed = 12345;
+    function rnd() { seed = (seed * 1664525 + 1013904223) % 4294967296; return seed / 4294967296; }
+    for (var y = 0; y < 72; y += 4) for (var x = 0; x < 192; x += 4) {
+      sc.fillStyle = 'hsla(' + Math.floor(rnd() * 360) + ',80%,' + (35 + Math.floor(rnd() * 40)) + '%,' + (0.35 + rnd() * 0.5).toFixed(2) + ')';
+      sc.fillRect(x, y, 4, 4);
+    }
+    var blobs = '<div class="blob b1"></div><div class="blob b2"></div>' + (level >= 4 ? '<div class="blob b3"></div>' : '');
+    var frag = document.createDocumentFragment();
+    for (var i = 1; i <= count; i++) {
+      var c = document.createElement('article');
+      c.className = 'card';
+      c.style.setProperty('--h', String((i * 37) % 360));
+      var cv = document.createElement('canvas'); cv.width = 192; cv.height = 72;
+      cv.getContext('2d').drawImage(src, 0, 0);
+      c.innerHTML = blobs + '<div class="glass"><b>Block ' + pad(i, 3) + '</b><span>' + Math.floor((i - 1) / cols) * ROWH + ' px</span></div>';
+      c.appendChild(cv);
+      frag.appendChild(c);
+    }
+    grid.appendChild(frag);
+    return { cards: count, cols: cols };
+  }
+  function stageTop() {
+    var sticky = els.status.offsetHeight + 12;
+    return Math.max(0, els.stageWrap.getBoundingClientRect().top + window.scrollY - sticky);
+  }
+
+  /* ---------- measurement ---------- */
+  function measure(durMs, speed) {
+    return new Promise(function (res) {
+      var T = [[], []], phase = 0, pStart = null, y0 = window.scrollY, yBase = y0, lastY = y0;
+      var maxY = document.documentElement.scrollHeight - window.innerHeight;
+      var touched = false, done = false, loaf = [], po = null, loafOk = false;
+      var evs = ['wheel', 'keydown', 'touchstart', 'mousedown'];
+      try {
+        po = new PerformanceObserver(function (l) { l.getEntries().forEach(function (x) { loaf.push(x); }); });
+        po.observe({ type: 'long-animation-frame', buffered: false });
+        loafOk = true;
+      } catch (e) { po = null; loafOk = false; }
+      function onTouch() { touched = true; }
+      function cleanup() {
+        evs.forEach(function (n) { window.removeEventListener(n, onTouch, true); });
+        removeFrom(abortFns, abort);
+        if (po) { try { po.disconnect(); } catch (e) { /* ignore */ } }
+      }
+      function abort() { done = true; cleanup(); res(null); }
+      function finish() {
+        done = true;
+        if (po) { try { po.takeRecords().forEach(function (x) { loaf.push(x); }); } catch (e) { /* ignore */ } }
+        cleanup();
+        res({ T: T, tTrig: tTrig, touched: touched, loaf: loaf, loafOk: loafOk });
+      }
+      function loop(ts) {
+        if (done) return;
+        if (document.hidden) { done = true; cleanup(); res({ hidden: true }); return; }
+        if (pStart === null) pStart = ts;
+        var el = ts - pStart;
+        if (el >= durMs) {
+          if (phase === 1) { finish(); return; }
+          phase = 1; pStart = ts; el = 0; yBase = lastY;
+        }
+        T[phase].push(ts);
+        lastY = Math.min(maxY, yBase + speed * el / 1000);
+        window.scrollTo(0, lastY);
+        requestAnimationFrame(loop);
+      }
+      evs.forEach(function (n) { window.addEventListener(n, onTouch, { passive: true, capture: true }); });
+      abortFns.push(abort);
+      var tTrig = performance.now();
+      requestAnimationFrame(loop);
+    });
+  }
+
+  function passStats(Tp, startRef, tTrig, ri, loaf) {
+    var n = Tp.length, iv = [], t = [], rel = [], i;
+    for (i = 0; i < n; i++) {
+      iv.push(i === 0 ? Math.max(0, Tp[0] - startRef) : Tp[i] - Tp[i - 1]);
+      t.push(Tp[i] - tTrig);
+      rel.push(Tp[i] - startRef);
+    }
+    var steady = iv.slice(1);
+    var dropped = 0, over50 = 0, over100 = 0, earlyExtra = 0, earlyDropped = 0, earlyMax = 0, lost = 0, maxIv = 0, worst = 0;
+    for (i = 0; i < n; i++) {
+      var d = iv[i];
+      var drop = d > 1.5 * ri ? Math.max(0, Math.round(d / ri) - 1) : 0;
+      dropped += drop; lost += Math.max(0, d - ri);
+      if (d > 50) over50++;
+      if (d > 100) over100++;
+      if (d > maxIv) { maxIv = d; worst = i; }
+      if (rel[i] <= 600) { earlyExtra += Math.max(0, d - ri); earlyDropped += drop; earlyMax = Math.max(earlyMax, d); }
+    }
+    var stable = null, k, j, ok;
+    for (k = 0; k + 15 <= n; k++) {
+      ok = true;
+      for (j = k; j < k + 15; j++) { if (iv[j] > 1.5 * ri) { ok = false; break; } }
+      if (ok) { stable = k === 0 ? 0 : rel[k - 1]; break; }
+    }
+    var wStart = worst === 0 ? startRef : Tp[worst - 1], wEnd = Tp[worst];
+    var lc = 0, lmax = 0, busy = 0;
+    loaf.forEach(function (e) {
+      var s = e.startTime, en = s + e.duration;
+      if (en >= startRef && s <= Tp[n - 1]) { lc++; lmax = Math.max(lmax, e.duration); }
+      var ov = Math.min(en, wEnd) - Math.max(s, wStart);
+      if (ov > 0) busy += ov;
+    });
+    return {
+      n: n, fps: n > 1 ? (n - 1) / ((Tp[n - 1] - Tp[0]) / 1000) : null,
+      first: iv[0], max: maxIv, p50: pct(steady, 0.5), p95: pct(steady, 0.95), p99: pct(steady, 0.99),
+      dropped: dropped, over50: over50, over100: over100, lost: lost,
+      earlyExtra: earlyExtra, earlyDropped: earlyDropped, earlyMax: earlyMax, stable: stable,
+      loafCount: lc, loafMax: lmax, worstIv: maxIv, worstBusy: busy, worstRest: Math.max(0, maxIv - busy),
+      base: startRef - tTrig, t: t.map(r1), iv: iv.map(r1)
+    };
+  }
+
+  /* ---------- orchestration ---------- */
+  function parseDelays(s) {
+    var out = [];
+    String(s).split(/[,\s;]+/).forEach(function (x) {
+      if (x === '') return;
+      var v = Number(x);
+      if (isFinite(v) && v >= 0 && v <= 300 && out.indexOf(v) < 0) out.push(v);
+    });
+    return out.slice(0, 8);
+  }
+  function readCfg() {
+    var delays = parseDelays(els.delay.value);
+    if (!delays.length) {
+      setState('warn', 'Check the delay', 'Enter a number of seconds from 0 to 300, or a list separated by commas, e.g. 5,10,20.');
+      return null;
+    }
+    return {
+      label: (els.label.value || 'Untitled').trim().slice(0, 40) || 'Untitled',
+      delays: delays, level: +els.level.value, dur: +els.dur.value, speed: +els.speed.value, reps: +els.reps.value
+    };
+  }
+  function estimateText() {
+    var d = parseDelays(els.delay.value);
+    if (!d.length) { els.estimate.textContent = ''; return; }
+    var dur = +els.dur.value, reps = +els.reps.value, lvl = +els.level.value;
+    var setup = lvl >= 4 ? 3.2 : 1.8;
+    var total = 0;
+    d.forEach(function (x) { total += reps * (setup + x + 2 * dur + 1.5); });
+    var m = Math.floor(total / 60), s = Math.round(total % 60);
+    els.estimate.textContent = 'Total runs: ' + d.length * reps + ', about ' + (m ? m + ' min ' : '') + s + ' s.';
+  }
+  function setRunning(on) {
+    els.btnStart.disabled = on; els.btnStop.disabled = !on; els.btnClear.disabled = on;
+    [els.label, els.delay, els.level, els.dur, els.speed, els.reps].forEach(function (e) { e.disabled = on; });
+    Array.prototype.forEach.call(els.delayChips.children, function (b) { b.disabled = on; });
+  }
+
+  async function runOne(cfg, delayS, k, total) {
+    for (;;) {
+      if (stopFlag) return 'stop';
+      var need = 2 * cfg.speed * cfg.dur + 3 * window.innerHeight;
+      var info = buildStage(cfg.level, need);
+      ignoreUntil = performance.now() + 900;
+      window.scrollTo(0, stageTop());
+      setState('wait', 'Run ' + k + ' of ' + total + ': don\'t touch the mouse or keyboard',
+        delayS > 0 ? 'In ' + delayS + ' s the page will scroll down by itself. No counter, so the card isn\'t woken up.' : 'Scroll starts immediately.');
+      var warmupMs = cfg.level >= 4 ? 2600 : 1800;
+      if (!(await sleep(warmupMs))) return 'stop';
+      var maxY = document.documentElement.scrollHeight - window.innerHeight;
+      var avail = maxY - window.scrollY - 40;
+      var speed = Math.max(200, Math.min(cfg.speed, avail / (2 * cfg.dur)));
+      var idleStart = performance.now();
+      if (delayS > 0) {
+        var r = await idleWait(delayS * 1000);
+        if (r === 'cancelled') return 'stop';
+        if (r === 'interrupted') {
+          setState('warn', 'There was input during idle', 'Run restarts.');
+          if (!(await sleep(1800))) return 'stop';
+          continue;
+        }
+      }
+      var idleActual = performance.now() - idleStart;
+      var m = await measure(cfg.dur * 1000, speed);
+      if (m === null) return 'stop';
+      var run = {
+        id: Date.now() + Math.floor(Math.random() * 1000), label: cfg.label, delayS: delayS,
+        idleActual: Math.round(idleActual), level: cfg.level, speed: Math.round(speed), dur: cfg.dur,
+        stageH: document.documentElement.scrollHeight, cards: info.cards, gpu: env.gpu, invalid: null
+      };
+      if (m.hidden) run.invalid = 'tab was not active';
+      else {
+        run.wall = fmtWall(performance.timeOrigin + m.tTrig);
+        if (m.touched) run.invalid = 'input during measurement';
+        var Tc = m.T[0], Tw = m.T[1];
+        if (Tc.length < 10 || Tw.length < 10) run.invalid = run.invalid || 'too few frames';
+        else {
+          var wivs = [];
+          for (var q = 11; q < Tw.length; q++) wivs.push(Tw[q] - Tw[q - 1]);
+          var ri = Math.min(40, Math.max(4, median(wivs) || 16.7));
+          run.ri = r1(ri);
+          run.cold = passStats(Tc, m.tTrig, m.tTrig, ri, m.loaf);
+          run.warm = passStats(Tw, Tc[Tc.length - 1], m.tTrig, ri, m.loaf);
+          run.loafOk = m.loafOk;
+          run.loss = r1(run.cold.earlyExtra - run.warm.earlyExtra);
+          run.lossDrop = run.cold.earlyDropped - run.warm.earlyDropped;
+        }
+      }
+      history.push(run);
+      if (history.length > 40) history.shift();
+      saveHistory();
+      selectedId = run.id;
+      renderAll();
+      if (run.invalid) setState('warn', 'Run invalid', 'Reason: ' + run.invalid + '. It is not counted in the totals.');
+      else setState('done', 'Run ' + k + ' ready', 'Wake ' + f(run.cold.first) + ' ms, loss over 600 ms ' + f(run.loss) + ' ms.');
+      if (k < total) { if (!(await sleep(1500))) return 'stop'; }
+      return 'ok';
+    }
+  }
+  async function startAll() {
+    if (running) return;
+    var cfg = readCfg();
+    if (!cfg) return;
+    running = true; stopFlag = false; setRunning(true);
+    var total = cfg.delays.length * cfg.reps, k = 0, aborted = false;
+    for (var a = 0; a < cfg.delays.length && !aborted; a++) {
+      for (var b = 0; b < cfg.reps; b++) {
+        k++;
+        var r = await runOne(cfg, cfg.delays[a], k, total);
+        if (r === 'stop') { aborted = true; break; }
+      }
+    }
+    running = false; setRunning(false);
+    ignoreUntil = performance.now() + 900;
+    window.scrollTo(0, 0);
+    if (aborted) setState('ready', 'Stopped', 'Results below. You can run again.');
+    else setState('done', 'Series complete', 'Results below. Change the configuration or delay and repeat.');
+  }
+  function stop() {
+    if (!running) return;
+    stopFlag = true;
+    abortFns.slice().forEach(function (fn) { fn(); });
+  }
+
+  /* ---------- rating ---------- */
+  function rate(loss) {
+    if (loss == null) return { t: '–', tone: 'neutral' };
+    if (loss <= 15) return { t: 'unnoticeable', tone: 'ok' };
+    if (loss <= 60) return { t: 'noticeable', tone: 'warn' };
+    return { t: 'severe', tone: 'bad' };
+  }
+  function valid() { return history.filter(function (r) { return !r.invalid && r.cold; }); }
+
+  /* ---------- render: last run ---------- */
+  function cls(v, warnAt, badAt) { return v == null ? 'na' : (v >= badAt ? 'bad' : (v >= warnAt ? 'warnc' : '')); }
+  function tc(v, d, warnAt, badAt) { return '<td class="num ' + cls(v, warnAt, badAt) + '">' + f(v, d) + '</td>'; }
+  function selectedRun() {
+    var r = history.filter(function (x) { return x.id === selectedId; })[0];
+    return r || history[history.length - 1] || null;
+  }
+  function renderLast() {
+    var r = selectedRun();
+    if (!r) {
+      els.verdict.dataset.tone = 'neutral';
+      els.verdict.innerHTML = '<strong>No runs yet</strong>Configure the test above and press «Run». The result will appear here.';
+      els.cmp.innerHTML = '';
+      els.capTimeline.textContent = '';
+      return;
+    }
+    if (r.invalid || !r.cold) {
+      els.verdict.dataset.tone = 'bad';
+      els.verdict.innerHTML = '<strong>Run invalid</strong>Reason: ' + esc(r.invalid || 'no data') + '. Repeat the test without touching input.';
+      els.cmp.innerHTML = '';
+      els.capTimeline.textContent = '';
+      return;
+    }
+    var c = r.cold, w = r.warm, rt = rate(r.loss);
+    var head = rt.t === 'unnoticeable' ? 'Wake is unnoticeable' : rt.t === 'noticeable' ? 'Wake is noticeable' : 'Wake causes severe lag';
+    els.verdict.dataset.tone = rt.tone;
+    els.verdict.innerHTML = '<strong>' + head + ': +' + f(r.loss) + ' ms</strong>' +
+      'After ' + f(r.delayS) + ' s of idle, the first frame came at ' + f(c.first) + ' ms, the worst interval was ' + f(c.max) +
+      ' ms, and frames stabilized after ' + (c.stable == null ? 'more than ' + (r.dur * 1000) : f(c.stable)) + ' ms. ' +
+      'In the warm pass, the worst interval was ' + f(w.max) + ' ms. During the first 600 ms, the cold pass lost ' + f(r.loss) +
+      ' ms to the warm one and about ' + Math.max(0, r.lossDrop) + ' frames.';
+    var loafTxt = function (p) { return r.loafOk ? p.loafCount + ' / ' + f(p.loafMax) + ' ms' : 'n/a'; };
+    var rest = function (p) { return r.loafOk ? 'main ' + f(p.worstBusy) + ' · rest ' + f(p.worstRest) : 'n/a'; };
+    els.cmp.innerHTML = '<thead><tr><th>Metric</th><th>Cold</th><th>Warm</th></tr></thead><tbody>' +
+      '<tr><td>Wake (to first frame), ms</td>' + tc(c.first, 0, 40, 80) + '<td class="num na">–</td></tr>' +
+      '<tr><td>Stable after, ms</td>' + tc(c.stable, 0, 150, 400) + tc(w.stable, 0, 150, 400) + '</tr>' +
+      '<tr><td>Max frame interval, ms</td>' + tc(c.max, 0, 33, 50) + tc(w.max, 0, 33, 50) + '</tr>' +
+      '<tr><td>p95 interval, ms</td>' + tc(c.p95, 1, 25, 33) + tc(w.p95, 1, 25, 33) + '</tr>' +
+      '<tr><td>Extra time in first 600 ms, ms</td>' + tc(c.earlyExtra, 0, 15, 60) + tc(w.earlyExtra, 0, 15, 60) + '</tr>' +
+      '<tr><td>Dropped frames (whole pass)</td>' + tc(c.dropped, 0, 3, 10) + tc(w.dropped, 0, 3, 10) + '</tr>' +
+      '<tr><td>Frames longer than 50 ms</td>' + tc(c.over50, 0, 1, 3) + tc(w.over50, 0, 1, 3) + '</tr>' +
+      '<tr><td>Average FPS</td><td class="num">' + f(c.fps, 1) + '</td><td class="num">' + f(w.fps, 1) + '</td></tr>' +
+      '<tr><td>Long frames in browser (LoAF)</td><td class="num">' + loafTxt(c) + '</td><td class="num">' + loafTxt(w) + '</td></tr>' +
+      '<tr><td>Worst frame: main thread and rest, ms</td><td class="num">' + rest(c) + '</td><td class="num">' + rest(w) + '</td></tr></tbody>';
+    els.capTimeline.textContent = 'Scroll start ' + r.wall + ' · idle actually ' + (r.idleActual / 1000).toFixed(1) + ' s · speed ' + r.speed +
+      ' px/s · ' + r.cards + ' blocks (' + Math.round(r.stageH) + ' px) · frame ≈ ' + r.ri + ' ms';
+    drawCharts();
+  }
+
+  /* ---------- charts ---------- */
+  function setupCanvas(cv, h) {
+    var dpr = window.devicePixelRatio || 1;
+    var w = Math.max(240, cv.parentElement.clientWidth - 24);
+    cv.style.width = w + 'px'; cv.style.height = h + 'px';
+    cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr);
+    var c = cv.getContext('2d');
+    c.setTransform(dpr, 0, 0, dpr, 0, 0);
+    c.clearRect(0, 0, w, h);
+    return { c: c, w: w, h: h };
+  }
+  function yMaxFor(arrs) {
+    var m = 0;
+    arrs.forEach(function (a) { a.forEach(function (v) { if (v > m) m = v; }); });
+    return m <= 60 ? 60 : Math.min(300, Math.ceil(m / 50) * 50);
+  }
+  function drawAxes(c, box, tMin, tMax, yMax, ri, xStep, xFmt) {
+    var muted = cssv('--muted'), line = cssv('--line'), bad = cssv('--bad');
+    c.font = '10px ' + cssv('--f-mono');
+    c.textBaseline = 'middle'; c.textAlign = 'right';
+    var ticks = [0, 50, 100, 150, 200, 250, 300].filter(function (v) { return v <= yMax; });
+    c.lineWidth = 1;
+    ticks.forEach(function (v) {
+      var y = box.y + box.h - v / yMax * box.h;
+      c.strokeStyle = line; c.beginPath(); c.moveTo(box.x, y); c.lineTo(box.x + box.w, y); c.stroke();
+      c.fillStyle = muted; c.fillText(String(v), box.x - 6, y);
+    });
+    var yr = box.y + box.h - ri / yMax * box.h;
+    c.setLineDash([4, 3]); c.strokeStyle = muted; c.beginPath(); c.moveTo(box.x, yr); c.lineTo(box.x + box.w, yr); c.stroke();
+    var y50 = box.y + box.h - 50 / yMax * box.h;
+    c.strokeStyle = bad; c.beginPath(); c.moveTo(box.x, y50); c.lineTo(box.x + box.w, y50); c.stroke();
+    c.setLineDash([]);
+    c.textAlign = 'center'; c.textBaseline = 'top'; c.fillStyle = muted;
+    for (var t = tMin; t <= tMax + 0.1; t += xStep) {
+      var x = box.x + (t - tMin) / (tMax - tMin) * box.w;
+      c.fillText(xFmt(t), x, box.y + box.h + 6);
+    }
+  }
+  function drawBars(c, box, tt, iv, tMin, tMax, yMax, ri) {
+    var okc = cssv('--accent'), warn = cssv('--go'), bad = cssv('--bad');
+    for (var i = 0; i < tt.length; i++) {
+      var t1 = tt[i], t0 = t1 - iv[i];
+      if (t1 < tMin || t0 > tMax) continue;
+      var x0 = box.x + (Math.max(t0, tMin) - tMin) / (tMax - tMin) * box.w;
+      var x1 = box.x + (Math.min(t1, tMax) - tMin) / (tMax - tMin) * box.w;
+      var h = Math.min(iv[i], yMax) / yMax * box.h;
+      c.fillStyle = iv[i] > 50 ? bad : (iv[i] > 1.5 * ri ? warn : okc);
+      c.fillRect(x0, box.y + box.h - h, Math.max(1, x1 - x0 - 0.6), h);
+    }
+  }
+  function drawCharts() {
+    var r = selectedRun();
+    if (!r || r.invalid || !r.cold) {
+      var e1 = setupCanvas(els.cvTimeline, 60), e2 = setupCanvas(els.cvZoom, 60);
+      [e1, e2].forEach(function (o) { o.c.fillStyle = cssv('--muted'); o.c.font = '13px ' + cssv('--f-body'); o.c.fillText('Data will appear after the first run.', 4, 30); });
+      return;
+    }
+    var c = r.cold, w = r.warm, ri = r.ri, muted = cssv('--muted');
+    var tt = c.t.concat(w.t), iv = c.iv.concat(w.iv);
+    var o = setupCanvas(els.cvTimeline, 210), ctx = o.c;
+    var box = { x: 36, y: 14, w: o.w - 46, h: 160 };
+    var tMax = tt[tt.length - 1], yMax = yMaxFor([iv]);
+    drawAxes(ctx, box, 0, tMax, yMax, ri, 1000, function (t) { return (t / 1000).toFixed(0) + ' s'; });
+    drawBars(ctx, box, tt, iv, 0, tMax, yMax, ri);
+    var bx = box.x + w.base / tMax * box.w;
+    ctx.strokeStyle = cssv('--ink'); ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(bx, box.y); ctx.lineTo(bx, box.y + box.h); ctx.stroke();
+    ctx.fillStyle = muted; ctx.font = '11px ' + cssv('--f-body'); ctx.textBaseline = 'top';
+    ctx.textAlign = 'right'; ctx.fillText('cold', bx - 6, box.y + 2);
+    ctx.textAlign = 'left'; ctx.fillText('warm', bx + 6, box.y + 2);
+    ctx.textAlign = 'right'; ctx.fillText('ms', 12, box.y - 12 + 8);
+
+    var narrow = o.w < 560;
+    var oz = setupCanvas(els.cvZoom, narrow ? 360 : 190), cz = oz.c;
+    var wz = narrow ? oz.w - 46 : (oz.w - 46 - 24) / 2, hz = 130;
+    var cr = c.t.map(function (t) { return t - c.base; }), wr = w.t.map(function (t) { return t - w.base; });
+    var zmax = yMaxFor([c.iv.filter(function (v, i) { return cr[i] <= 600; }), w.iv.filter(function (v, i) { return wr[i] <= 600; })]);
+    function panel(bx0, by0, tts, ivs, title) {
+      var b = { x: bx0, y: by0, w: wz, h: hz };
+      drawAxes(cz, b, 0, 600, zmax, ri, 200, function (t) { return t + ' ms'; });
+      drawBars(cz, b, tts, ivs, 0, 600, zmax, ri);
+      cz.fillStyle = cssv('--ink'); cz.font = '600 12px ' + cssv('--f-body'); cz.textAlign = 'left'; cz.textBaseline = 'top';
+      cz.fillText(title, b.x + 4, b.y - 12);
+    }
+    panel(36, 22, cr, c.iv, 'Cold');
+    panel(narrow ? 36 : 36 + wz + 24, narrow ? 22 + hz + 54 : 22, wr, w.iv, 'Warm');
+  }
+  function drawLadder() {
+    var vr = valid();
+    var o = setupCanvas(els.cvLadder, 240), c = o.c;
+    var labels = [], delays = [];
+    vr.forEach(function (r) { if (labels.indexOf(r.label) < 0) labels.push(r.label); if (delays.indexOf(r.delayS) < 0) delays.push(r.delayS); });
+    delays.sort(function (a, b) { return a - b; });
+    if (!vr.length) {
+      c.fillStyle = cssv('--muted'); c.font = '13px ' + cssv('--f-body');
+      c.fillText('The chart will appear after runs with different configurations or delays.', 4, 30);
+      return;
+    }
+    var series = labels.map(function (lb) {
+      return delays.map(function (d) {
+        var m = median(vr.filter(function (r) { return r.label === lb && r.delayS === d; }).map(function (r) { return r.loss; }));
+        return m;
+      });
+    });
+    var maxV = 20, minV = 0;
+    series.forEach(function (s) { s.forEach(function (v) { if (v != null) { maxV = Math.max(maxV, v); minV = Math.min(minV, v); } }); });
+    maxV = Math.ceil(maxV * 1.1 / 10) * 10;
+    var box = { x: 46, y: 28, w: o.w - 62, h: 160 };
+    var line = cssv('--line'), muted = cssv('--muted'), pal = [cssv('--accent'), cssv('--go'), cssv('--blue'), cssv('--bad')];
+    c.font = '10px ' + cssv('--f-mono'); c.textBaseline = 'middle'; c.textAlign = 'right';
+    function yy(v) { return box.y + box.h - (v - minV) / (maxV - minV) * box.h; }
+    var step = maxV - minV > 120 ? 50 : 20;
+    for (var v = Math.ceil(minV / step) * step; v <= maxV; v += step) {
+      c.strokeStyle = line; c.beginPath(); c.moveTo(box.x, yy(v)); c.lineTo(box.x + box.w, yy(v)); c.stroke();
+      c.fillStyle = muted; c.fillText(String(v), box.x - 6, yy(v));
+    }
+    c.setLineDash([4, 3]);
+    [[15, cssv('--ok')], [60, cssv('--bad')]].forEach(function (p) {
+      if (p[0] > maxV) return;
+      c.strokeStyle = p[1]; c.beginPath(); c.moveTo(box.x, yy(p[0])); c.lineTo(box.x + box.w, yy(p[0])); c.stroke();
+    });
+    c.setLineDash([]);
+    function xx(i) { return delays.length === 1 ? box.x + box.w / 2 : box.x + 20 + i / (delays.length - 1) * (box.w - 40); }
+    c.textAlign = 'center'; c.textBaseline = 'top'; c.fillStyle = muted;
+    delays.forEach(function (d, i) { c.fillText(d + ' s', xx(i), box.y + box.h + 8); });
+    series.forEach(function (s, si) {
+      var col = pal[si % pal.length];
+      c.strokeStyle = col; c.fillStyle = col; c.lineWidth = 2; c.beginPath();
+      var started = false;
+      s.forEach(function (v, i) { if (v == null) return; if (!started) { c.moveTo(xx(i), yy(v)); started = true; } else c.lineTo(xx(i), yy(v)); });
+      c.stroke();
+      s.forEach(function (v, i) { if (v == null) return; c.beginPath(); c.arc(xx(i), yy(v), 4, 0, 6.2832); c.fill(); });
+    });
+    c.textAlign = 'left'; c.textBaseline = 'middle'; c.font = '12px ' + cssv('--f-body');
+    var lx = box.x;
+    labels.forEach(function (lb, i) {
+      c.fillStyle = pal[i % pal.length]; c.fillRect(lx, 8, 12, 4);
+      c.fillStyle = cssv('--ink'); c.fillText(lb, lx + 18, 10);
+      lx += 30 + c.measureText(lb).width + 12;
+    });
+    c.fillStyle = muted; c.font = '10px ' + cssv('--f-mono'); c.textAlign = 'left';
+    c.fillText('ms', 4, box.y - 6);
+  }
+
+  /* ---------- render: groups and history ---------- */
+  function renderGroups() {
+    var vr = valid(), g = {};
+    vr.forEach(function (r) { var k = r.label + '|' + r.delayS; (g[k] = g[k] || { label: r.label, delayS: r.delayS, runs: [] }).runs.push(r); });
+    var list = Object.keys(g).map(function (k) { return g[k]; });
+    list.sort(function (a, b) { return a.label === b.label ? a.delayS - b.delayS : (a.label < b.label ? -1 : 1); });
+    var head = '<thead><tr><th>Configuration</th><th>Delay</th><th>Runs</th><th>Wake, ms</th><th>Loss, ms</th><th>Max frame, ms</th><th>Stable after, ms</th><th>FPS cold</th><th>FPS warm</th><th>Rating</th></tr></thead>';
+    if (!list.length) { els.groups.innerHTML = head + '<tbody><tr><td class="empty-cell" colspan="10">No totals yet. Run the test at least once.</td></tr></tbody>'; return; }
+    var body = list.map(function (x) {
+      var m = function (fn) { return median(x.runs.map(fn)); };
+      var loss = m(function (r) { return r.loss; }), rt = rate(loss);
+      var tone = rt.tone === 'bad' ? 'bad' : rt.tone === 'warn' ? 'warnc' : '';
+      return '<tr><td>' + esc(x.label) + '</td><td class="num">' + x.delayS + ' s</td><td class="num">' + x.runs.length + '</td>' +
+        tc(m(function (r) { return r.cold.first; }), 0, 40, 80) + tc(loss, 0, 15, 60) +
+        tc(m(function (r) { return r.cold.max; }), 0, 33, 50) + tc(m(function (r) { return r.cold.stable; }), 0, 150, 400) +
+        '<td class="num">' + f(m(function (r) { return r.cold.fps; }), 1) + '</td><td class="num">' + f(m(function (r) { return r.warm.fps; }), 1) + '</td>' +
+        '<td class="' + tone + '">' + rt.t + '</td></tr>';
+    }).join('');
+    els.groups.innerHTML = head + '<tbody>' + body + '</tbody>';
+  }
+  function renderHistory() {
+    if (!history.length) { els.history.innerHTML = '<tr><td class="empty-cell" colspan="8">No runs yet.</td></tr>'; return; }
+    els.history.innerHTML = history.map(function (r, i) {
+      if (r.invalid || !r.cold) {
+        return '<tr><td>' + (i + 1) + '</td><td>' + esc(r.label) + '</td><td class="num">' + r.delayS + ' s</td><td class="num">–</td><td colspan="3" style="text-align:left;color:var(--bad)">invalid: ' + esc(r.invalid || 'no data') + '</td><td></td></tr>';
+      }
+      return '<tr><td>' + (i + 1) + '</td><td>' + esc(r.label) + '</td><td class="num">' + r.delayS + ' s</td><td class="num">' + r.wall + '</td>' +
+        tc(r.cold.first, 0, 40, 80) + tc(r.loss, 0, 15, 60) + tc(r.cold.max, 0, 33, 50) +
+        '<td><button type="button" class="quiet mini" data-show="' + r.id + '">Show</button></td></tr>';
+    }).join('');
+  }
+  function buildReport() {
+    var L = [];
+    L.push('Idle-scroll benchmark, ' + fmtWall(Date.now()));
+    L.push('Browser: ' + navigator.userAgent);
+    L.push('Screen: ' + screen.width + 'x' + screen.height + ' @' + window.devicePixelRatio + 'x');
+    L.push('Browser GPU (WebGL): ' + env.gpu);
+    L.push('Loss = extra ms over a normal frame in the first 600 ms after scroll start, cold pass minus warm pass.');
+    L.push('');
+    var vr = valid();
+    if (!vr.length) { L.push('No valid runs yet.'); return L.join('\n'); }
+    vr.forEach(function (r, i) {
+      L.push('#' + (i + 1) + ' [' + r.label + '] idle=' + r.delayS + 's (actual ' + (r.idleActual / 1000).toFixed(1) + 's) scroll_start=' + r.wall +
+        ' wake=' + f(r.cold.first) + 'ms loss=' + f(r.loss) + 'ms max_frame_cold=' + f(r.cold.max) + 'ms max_frame_warm=' + f(r.warm.max) +
+        'ms stable_after=' + (r.cold.stable == null ? 'n/a' : f(r.cold.stable) + 'ms') + ' dropped_cold=' + r.cold.dropped + ' dropped_warm=' + r.warm.dropped +
+        ' fps_cold=' + f(r.cold.fps, 1) + ' fps_warm=' + f(r.warm.fps, 1) + ' frame=' + r.ri + 'ms level=' + r.level + ' speed=' + r.speed + 'px/s' +
+        (r.loafOk ? ' worst_cold: main=' + f(r.cold.worstBusy) + 'ms rest=' + f(r.cold.worstRest) + 'ms' : ''));
+    });
+    return L.join('\n');
+  }
+  function renderAll() {
+    renderLast(); drawLadder(); renderGroups(); renderHistory();
+    els.report.value = buildReport();
+  }
+
+  /* ---------- environment ---------- */
+  function renderEnv() {
+    els.env.innerHTML = '<dt>Browser</dt><dd>' + esc(navigator.userAgent.replace(/^Mozilla\/5\.0 /, '')) + '</dd>' +
+      '<dt>Screen</dt><dd>' + screen.width + '×' + screen.height + ', scale ' + window.devicePixelRatio + '×</dd>' +
+      '<dt>Browser GPU</dt><dd>' + esc(env.gpu) + '</dd>';
+  }
+  function detectGpu() {
+    try {
+      var cv = document.createElement('canvas');
+      var gl = cv.getContext('webgl');
+      if (!gl) { env.gpu = 'unavailable'; return; }
+      var ext = gl.getExtension('WEBGL_debug_renderer_info');
+      env.gpu = ext ? gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER);
+      var lose = gl.getExtension('WEBGL_lose_context');
+      if (lose) lose.loseContext();
+    } catch (e) { env.gpu = 'unavailable'; }
+  }
+
+  /* ---------- copy ---------- */
+  async function copyText(text, area, msgEl) {
+    var ok = false;
+    try { await navigator.clipboard.writeText(text); ok = true; } catch (e) {
+      try { if (area && area.select) { area.focus(); area.select(); ok = document.execCommand('copy'); } } catch (e2) { ok = false; }
+    }
+    msgEl.textContent = ok ? 'Copied' : 'Failed. Select the text and press Ctrl+C.';
+  }
+
+  /* ---------- wire up ---------- */
+  els.btnStart.addEventListener('click', startAll);
+  els.btnStop.addEventListener('click', stop);
+  els.delayChips.addEventListener('click', function (e) {
+    var b = e.target.closest('button[data-v]');
+    if (!b || running) return;
+    els.delay.value = b.getAttribute('data-v'); estimateText();
+  });
+  [els.delay, els.dur, els.reps, els.level].forEach(function (e) { e.addEventListener('input', estimateText); e.addEventListener('change', estimateText); });
+  els.history.addEventListener('click', function (e) {
+    var b = e.target.closest('button[data-show]');
+    if (!b) return;
+    selectedId = +b.getAttribute('data-show');
+    renderLast();
+    document.getElementById('verdict').scrollIntoView({ block: 'center' });
+  });
+  els.btnClear.addEventListener('click', function () {
+    if (els.btnClear.dataset.armed !== '1') {
+      els.btnClear.dataset.armed = '1'; els.btnClear.textContent = 'Really clear?';
+      setTimeout(function () { els.btnClear.dataset.armed = ''; els.btnClear.textContent = 'Clear history'; }, 3500);
+      return;
+    }
+    history = []; selectedId = null; saveHistory(); renderAll();
+    els.btnClear.dataset.armed = ''; els.btnClear.textContent = 'Clear history';
+  });
+  els.btnCopy.addEventListener('click', function () { copyText(els.report.value, els.report, els.copyMsg); });
+  els.btnCmd.addEventListener('click', function () {
+    var ta = document.createElement('textarea');
+    ta.value = els.cmdText.textContent; ta.setAttribute('readonly', ''); ta.style.position = 'fixed'; ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    copyText(ta.value, ta, els.cmdMsg).then(function () { document.body.removeChild(ta); });
+  });
+  var rz = null;
+  window.addEventListener('resize', function () { clearTimeout(rz); rz = setTimeout(function () { if (!running) { drawCharts(); drawLadder(); } }, 150); });
+  try {
+    window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', function () { if (!running) { drawCharts(); drawLadder(); } });
+  } catch (e) { /* older browsers */ }
+
+  history = loadHistory();
+  if (history.length) selectedId = history[history.length - 1].id;
+  detectGpu(); renderEnv(); estimateText();
+  buildStage(2, 3000);
+  saveHistory();
+  renderAll();
+})();
+</script>
+
+</body></html>
