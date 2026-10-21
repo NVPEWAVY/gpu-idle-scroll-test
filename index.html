@@ -295,6 +295,11 @@ pre.cmd { margin: 0; padding: 12px; overflow-x: auto; background: var(--bg); bor
           <datalist id="labelList"><option value="GTX 960"><option value="RTX 3060"></datalist>
         </div>
         <div class="field">
+          <label for="cfgBrowser">Browser under test</label>
+          <select id="cfgBrowser"></select>
+          <p class="msg" id="browserNote"></p>
+        </div>
+        <div class="field">
           <label for="cfgDelay">Delay before start, s (a list is allowed)</label>
           <input type="text" id="cfgDelay" value="10" inputmode="numeric" autocomplete="off">
           <div class="chips" id="delayChips">
@@ -377,6 +382,12 @@ pre.cmd { margin: 0; padding: 12px; overflow-x: auto; background: var(--bg); bor
 
   <section class="block">
     <h2>Configuration comparison</h2>
+    <div class="panel">
+      <div class="field">
+        <label for="viewBrowser">Show results for (applies to comparison, all runs and report)</label>
+        <select id="viewBrowser"><option value="all">All browsers</option></select>
+      </div>
+    </div>
     <div class="chartbox">
       <h3>Loss vs delay</h3>
       <canvas id="cvLadder" aria-label="Loss as a function of delay"></canvas>
@@ -391,7 +402,7 @@ pre.cmd { margin: 0; padding: 12px; overflow-x: auto; background: var(--bg); bor
       <table class="wide" aria-label="All runs">
         <thead>
           <tr>
-            <th>#</th><th>Configuration</th><th>Delay</th><th>Scroll start</th>
+            <th>#</th><th>Configuration</th><th>Browser</th><th>Delay</th><th>Scroll start</th>
             <th>Wake, ms</th><th>Loss, ms</th><th>Max frame, ms</th><th></th>
           </tr>
         </thead>
@@ -445,13 +456,27 @@ pre.cmd { margin: 0; padding: 12px; overflow-x: auto; background: var(--bg); bor
     verdict: $('verdict'), cmp: $('cmp'), cvTimeline: $('cvTimeline'), capTimeline: $('capTimeline'), cvZoom: $('cvZoom'),
     cvLadder: $('cvLadder'), groups: $('groups'), history: $('history'), btnClear: $('btnClear'), lsNote: $('lsNote'),
     report: $('report'), btnCopy: $('btnCopy'), copyMsg: $('copyMsg'), btnCmd: $('btnCmd'), cmdMsg: $('cmdMsg'), cmdText: $('cmdText'),
-    env: $('env'), stage: $('stage'), stageWrap: $('stageWrap')
+    env: $('env'), stage: $('stage'), stageWrap: $('stageWrap'), browser: $('cfgBrowser'), browserNote: $('browserNote'), view: $('viewBrowser')
   };
 
   var LS_KEY = 'gpu-idle-bench-v1';
   var running = false, stopFlag = false, abortFns = [], ignoreUntil = 0;
   var lsOk = true, history = [], selectedId = null;
   var env = { gpu: '…' };
+  var BROWSERS = { chrome: 'Chrome', firefox: 'Firefox', edge: 'Edge', safari: 'Safari', opera: 'Opera', other: 'Other (not verified)' };
+  function detectBrowser() {
+    var u = navigator.userAgent;
+    if (/Firefox\/|FxiOS/.test(u)) return 'firefox';
+    if (/Edg(e|A|iOS)?\//.test(u)) return 'edge';
+    if (/OPR\/|Opera/.test(u)) return 'opera';
+    if (/Chrome\/|CriOS/.test(u)) return 'chrome';
+    if (/Safari\//.test(u)) return 'safari';
+    return 'other';
+  }
+  var detectedBrowser = detectBrowser();
+  function rb(r) { return r.browser || 'unknown'; }
+  function bname(k) { return BROWSERS[k] || (k === 'unknown' ? 'Unknown' : k); }
+  function sk(r) { return r.label + ' · ' + bname(rb(r)); }
 
   /* ---------- helpers ---------- */
   function pad(n, w) { n = String(n); while (n.length < (w || 2)) n = '0' + n; return n; }
@@ -656,14 +681,27 @@ pre.cmd { margin: 0; padding: 12px; overflow-x: auto; background: var(--bg); bor
     });
     return out.slice(0, 8);
   }
+  function checkBrowser() {
+    var sel = els.browser.value, ok = sel === 'other' || sel === detectedBrowser;
+    var loaf = !!(window.PerformanceObserver && PerformanceObserver.supportedEntryTypes && PerformanceObserver.supportedEntryTypes.indexOf('long-animation-frame') >= 0);
+    if (!ok) {
+      els.browserNote.textContent = 'Selected ' + bname(sel) + ', but this page is open in ' + bname(detectedBrowser) + '. Open the file in ' + bname(sel) + ' or change the selection. The run is blocked so results are not mixed up.';
+    } else {
+      els.browserNote.textContent = loaf ? '' : 'This browser has no Long Animation Frames API: «main thread / rest» rows will show n/a. All other metrics work.';
+    }
+    els.browserNote.style.color = ok ? '' : 'var(--bad)';
+    els.btnStart.disabled = !ok || running;
+    return ok;
+  }
   function readCfg() {
+    if (!checkBrowser()) { setState('warn', 'Browser mismatch', els.browserNote.textContent); return null; }
     var delays = parseDelays(els.delay.value);
     if (!delays.length) {
       setState('warn', 'Check the delay', 'Enter a number of seconds from 0 to 300, or a list separated by commas, e.g. 5,10,20.');
       return null;
     }
     return {
-      label: (els.label.value || 'Untitled').trim().slice(0, 40) || 'Untitled',
+      label: (els.label.value || 'Untitled').trim().slice(0, 40) || 'Untitled', browser: els.browser.value,
       delays: delays, level: +els.level.value, dur: +els.dur.value, speed: +els.speed.value, reps: +els.reps.value
     };
   }
@@ -679,7 +717,8 @@ pre.cmd { margin: 0; padding: 12px; overflow-x: auto; background: var(--bg); bor
   }
   function setRunning(on) {
     els.btnStart.disabled = on; els.btnStop.disabled = !on; els.btnClear.disabled = on;
-    [els.label, els.delay, els.level, els.dur, els.speed, els.reps].forEach(function (e) { e.disabled = on; });
+    [els.label, els.browser, els.delay, els.level, els.dur, els.speed, els.reps].forEach(function (e) { e.disabled = on; });
+    if (!on) checkBrowser();
     Array.prototype.forEach.call(els.delayChips.children, function (b) { b.disabled = on; });
   }
 
@@ -713,7 +752,8 @@ pre.cmd { margin: 0; padding: 12px; overflow-x: auto; background: var(--bg); bor
       var run = {
         id: Date.now() + Math.floor(Math.random() * 1000), label: cfg.label, delayS: delayS,
         idleActual: Math.round(idleActual), level: cfg.level, speed: Math.round(speed), dur: cfg.dur,
-        stageH: document.documentElement.scrollHeight, cards: info.cards, gpu: env.gpu, invalid: null
+        stageH: document.documentElement.scrollHeight, cards: info.cards, gpu: env.gpu, invalid: null,
+        browser: cfg.browser, browserDetected: detectedBrowser, ua: navigator.userAgent
       };
       if (m.hidden) run.invalid = 'tab was not active';
       else {
@@ -777,6 +817,16 @@ pre.cmd { margin: 0; padding: 12px; overflow-x: auto; background: var(--bg); bor
     return { t: 'severe', tone: 'bad' };
   }
   function valid() { return history.filter(function (r) { return !r.invalid && r.cold; }); }
+  function shown() {
+    var v = els.view.value || 'all';
+    return valid().filter(function (r) { return v === 'all' || rb(r) === v; });
+  }
+  function renderViewOptions() {
+    var cur = els.view.value || 'all', seen = [];
+    history.forEach(function (r) { if (seen.indexOf(rb(r)) < 0) seen.push(rb(r)); });
+    els.view.innerHTML = '<option value="all">All browsers</option>' + seen.map(function (k) { return '<option value="' + esc(k) + '">' + esc(bname(k)) + '</option>'; }).join('');
+    els.view.value = (cur === 'all' || seen.indexOf(cur) >= 0) ? cur : 'all';
+  }
 
   /* ---------- render: last run ---------- */
   function cls(v, warnAt, badAt) { return v == null ? 'na' : (v >= badAt ? 'bad' : (v >= warnAt ? 'warnc' : '')); }
@@ -822,7 +872,7 @@ pre.cmd { margin: 0; padding: 12px; overflow-x: auto; background: var(--bg); bor
       '<tr><td>Average FPS</td><td class="num">' + f(c.fps, 1) + '</td><td class="num">' + f(w.fps, 1) + '</td></tr>' +
       '<tr><td>Long frames in browser (LoAF)</td><td class="num">' + loafTxt(c) + '</td><td class="num">' + loafTxt(w) + '</td></tr>' +
       '<tr><td>Worst frame: main thread and rest, ms</td><td class="num">' + rest(c) + '</td><td class="num">' + rest(w) + '</td></tr></tbody>';
-    els.capTimeline.textContent = 'Scroll start ' + r.wall + ' · idle actually ' + (r.idleActual / 1000).toFixed(1) + ' s · speed ' + r.speed +
+    els.capTimeline.textContent = 'Browser ' + bname(rb(r)) + ' · scroll start ' + r.wall + ' · idle actually ' + (r.idleActual / 1000).toFixed(1) + ' s · speed ' + r.speed +
       ' px/s · ' + r.cards + ' blocks (' + Math.round(r.stageH) + ' px) · frame ≈ ' + r.ri + ' ms';
     drawCharts();
   }
@@ -914,10 +964,10 @@ pre.cmd { margin: 0; padding: 12px; overflow-x: auto; background: var(--bg); bor
     panel(narrow ? 36 : 36 + wz + 24, narrow ? 22 + hz + 54 : 22, wr, w.iv, 'Warm');
   }
   function drawLadder() {
-    var vr = valid();
+    var vr = shown();
     var o = setupCanvas(els.cvLadder, 240), c = o.c;
     var labels = [], delays = [];
-    vr.forEach(function (r) { if (labels.indexOf(r.label) < 0) labels.push(r.label); if (delays.indexOf(r.delayS) < 0) delays.push(r.delayS); });
+    vr.forEach(function (r) { if (labels.indexOf(sk(r)) < 0) labels.push(sk(r)); if (delays.indexOf(r.delayS) < 0) delays.push(r.delayS); });
     delays.sort(function (a, b) { return a - b; });
     if (!vr.length) {
       c.fillStyle = cssv('--muted'); c.font = '13px ' + cssv('--f-body');
@@ -926,7 +976,7 @@ pre.cmd { margin: 0; padding: 12px; overflow-x: auto; background: var(--bg); bor
     }
     var series = labels.map(function (lb) {
       return delays.map(function (d) {
-        var m = median(vr.filter(function (r) { return r.label === lb && r.delayS === d; }).map(function (r) { return r.loss; }));
+        var m = median(vr.filter(function (r) { return sk(r) === lb && r.delayS === d; }).map(function (r) { return r.loss; }));
         return m;
       });
     });
@@ -972,17 +1022,17 @@ pre.cmd { margin: 0; padding: 12px; overflow-x: auto; background: var(--bg); bor
 
   /* ---------- render: groups and history ---------- */
   function renderGroups() {
-    var vr = valid(), g = {};
-    vr.forEach(function (r) { var k = r.label + '|' + r.delayS; (g[k] = g[k] || { label: r.label, delayS: r.delayS, runs: [] }).runs.push(r); });
+    var vr = shown(), g = {};
+    vr.forEach(function (r) { var k = r.label + '|' + rb(r) + '|' + r.delayS; (g[k] = g[k] || { label: r.label, browser: rb(r), delayS: r.delayS, runs: [] }).runs.push(r); });
     var list = Object.keys(g).map(function (k) { return g[k]; });
-    list.sort(function (a, b) { return a.label === b.label ? a.delayS - b.delayS : (a.label < b.label ? -1 : 1); });
-    var head = '<thead><tr><th>Configuration</th><th>Delay</th><th>Runs</th><th>Wake, ms</th><th>Loss, ms</th><th>Max frame, ms</th><th>Stable after, ms</th><th>FPS cold</th><th>FPS warm</th><th>Rating</th></tr></thead>';
-    if (!list.length) { els.groups.innerHTML = head + '<tbody><tr><td class="empty-cell" colspan="10">No totals yet. Run the test at least once.</td></tr></tbody>'; return; }
+    list.sort(function (a, b) { return a.label !== b.label ? (a.label < b.label ? -1 : 1) : a.browser !== b.browser ? (a.browser < b.browser ? -1 : 1) : a.delayS - b.delayS; });
+    var head = '<thead><tr><th>Configuration</th><th>Browser</th><th>Delay</th><th>Runs</th><th>Wake, ms</th><th>Loss, ms</th><th>Max frame, ms</th><th>Stable after, ms</th><th>FPS cold</th><th>FPS warm</th><th>Rating</th></tr></thead>';
+    if (!list.length) { els.groups.innerHTML = head + '<tbody><tr><td class="empty-cell" colspan="11">No totals yet. Run the test at least once.</td></tr></tbody>'; return; }
     var body = list.map(function (x) {
       var m = function (fn) { return median(x.runs.map(fn)); };
       var loss = m(function (r) { return r.loss; }), rt = rate(loss);
       var tone = rt.tone === 'bad' ? 'bad' : rt.tone === 'warn' ? 'warnc' : '';
-      return '<tr><td>' + esc(x.label) + '</td><td class="num">' + x.delayS + ' s</td><td class="num">' + x.runs.length + '</td>' +
+      return '<tr><td>' + esc(x.label) + '</td><td>' + esc(bname(x.browser)) + '</td><td class="num">' + x.delayS + ' s</td><td class="num">' + x.runs.length + '</td>' +
         tc(m(function (r) { return r.cold.first; }), 0, 40, 80) + tc(loss, 0, 15, 60) +
         tc(m(function (r) { return r.cold.max; }), 0, 33, 50) + tc(m(function (r) { return r.cold.stable; }), 0, 150, 400) +
         '<td class="num">' + f(m(function (r) { return r.cold.fps; }), 1) + '</td><td class="num">' + f(m(function (r) { return r.warm.fps; }), 1) + '</td>' +
@@ -991,12 +1041,14 @@ pre.cmd { margin: 0; padding: 12px; overflow-x: auto; background: var(--bg); bor
     els.groups.innerHTML = head + '<tbody>' + body + '</tbody>';
   }
   function renderHistory() {
-    if (!history.length) { els.history.innerHTML = '<tr><td class="empty-cell" colspan="8">No runs yet.</td></tr>'; return; }
+    if (!history.length) { els.history.innerHTML = '<tr><td class="empty-cell" colspan="9">No runs yet.</td></tr>'; return; }
+    var vw = els.view.value || 'all';
     els.history.innerHTML = history.map(function (r, i) {
+      if (vw !== 'all' && rb(r) !== vw) return '';
       if (r.invalid || !r.cold) {
-        return '<tr><td>' + (i + 1) + '</td><td>' + esc(r.label) + '</td><td class="num">' + r.delayS + ' s</td><td class="num">–</td><td colspan="3" style="text-align:left;color:var(--bad)">invalid: ' + esc(r.invalid || 'no data') + '</td><td></td></tr>';
+        return '<tr><td>' + (i + 1) + '</td><td>' + esc(r.label) + '</td><td>' + esc(bname(rb(r))) + '</td><td class="num">' + r.delayS + ' s</td><td class="num">–</td><td colspan="3" style="text-align:left;color:var(--bad)">invalid: ' + esc(r.invalid || 'no data') + '</td><td></td></tr>';
       }
-      return '<tr><td>' + (i + 1) + '</td><td>' + esc(r.label) + '</td><td class="num">' + r.delayS + ' s</td><td class="num">' + r.wall + '</td>' +
+      return '<tr><td>' + (i + 1) + '</td><td>' + esc(r.label) + '</td><td>' + esc(bname(rb(r))) + '</td><td class="num">' + r.delayS + ' s</td><td class="num">' + r.wall + '</td>' +
         tc(r.cold.first, 0, 40, 80) + tc(r.loss, 0, 15, 60) + tc(r.cold.max, 0, 33, 50) +
         '<td><button type="button" class="quiet mini" data-show="' + r.id + '">Show</button></td></tr>';
     }).join('');
@@ -1005,14 +1057,15 @@ pre.cmd { margin: 0; padding: 12px; overflow-x: auto; background: var(--bg); bor
     var L = [];
     L.push('Idle-scroll benchmark, ' + fmtWall(Date.now()));
     L.push('Browser: ' + navigator.userAgent);
+    L.push('Detected browser: ' + bname(detectedBrowser) + ' · results filter: ' + ((els.view.value || 'all') === 'all' ? 'all browsers' : bname(els.view.value)));
     L.push('Screen: ' + screen.width + 'x' + screen.height + ' @' + window.devicePixelRatio + 'x');
     L.push('Browser GPU (WebGL): ' + env.gpu);
     L.push('Loss = extra ms over a normal frame in the first 600 ms after scroll start, cold pass minus warm pass.');
     L.push('');
-    var vr = valid();
+    var vr = shown();
     if (!vr.length) { L.push('No valid runs yet.'); return L.join('\n'); }
     vr.forEach(function (r, i) {
-      L.push('#' + (i + 1) + ' [' + r.label + '] idle=' + r.delayS + 's (actual ' + (r.idleActual / 1000).toFixed(1) + 's) scroll_start=' + r.wall +
+      L.push('#' + (i + 1) + ' [' + r.label + ' / ' + bname(rb(r)) + '] idle=' + r.delayS + 's (actual ' + (r.idleActual / 1000).toFixed(1) + 's) scroll_start=' + r.wall +
         ' wake=' + f(r.cold.first) + 'ms loss=' + f(r.loss) + 'ms max_frame_cold=' + f(r.cold.max) + 'ms max_frame_warm=' + f(r.warm.max) +
         'ms stable_after=' + (r.cold.stable == null ? 'n/a' : f(r.cold.stable) + 'ms') + ' dropped_cold=' + r.cold.dropped + ' dropped_warm=' + r.warm.dropped +
         ' fps_cold=' + f(r.cold.fps, 1) + ' fps_warm=' + f(r.warm.fps, 1) + ' frame=' + r.ri + 'ms level=' + r.level + ' speed=' + r.speed + 'px/s' +
@@ -1021,13 +1074,14 @@ pre.cmd { margin: 0; padding: 12px; overflow-x: auto; background: var(--bg); bor
     return L.join('\n');
   }
   function renderAll() {
+    renderViewOptions();
     renderLast(); drawLadder(); renderGroups(); renderHistory();
     els.report.value = buildReport();
   }
 
   /* ---------- environment ---------- */
   function renderEnv() {
-    els.env.innerHTML = '<dt>Browser</dt><dd>' + esc(navigator.userAgent.replace(/^Mozilla\/5\.0 /, '')) + '</dd>' +
+    els.env.innerHTML = '<dt>Detected browser</dt><dd>' + esc(bname(detectedBrowser)) + '</dd><dt>User agent</dt><dd>' + esc(navigator.userAgent.replace(/^Mozilla\/5\.0 /, '')) + '</dd>' +
       '<dt>Screen</dt><dd>' + screen.width + '×' + screen.height + ', scale ' + window.devicePixelRatio + '×</dd>' +
       '<dt>Browser GPU</dt><dd>' + esc(env.gpu) + '</dd>';
   }
@@ -1090,12 +1144,17 @@ pre.cmd { margin: 0; padding: 12px; overflow-x: auto; background: var(--bg); bor
     window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', function () { if (!running) { drawCharts(); drawLadder(); } });
   } catch (e) { /* older browsers */ }
 
+  els.browser.innerHTML = Object.keys(BROWSERS).map(function (k) { return '<option value="' + k + '">' + BROWSERS[k] + '</option>'; }).join('');
+  els.browser.value = detectedBrowser;
+  els.browser.addEventListener('change', checkBrowser);
+  els.view.addEventListener('change', renderAll);
   history = loadHistory();
   if (history.length) selectedId = history[history.length - 1].id;
   detectGpu(); renderEnv(); estimateText();
   buildStage(2, 3000);
   saveHistory();
   renderAll();
+  checkBrowser();
 })();
 </script>
 
