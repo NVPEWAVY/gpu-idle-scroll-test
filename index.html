@@ -418,9 +418,15 @@ pre.cmd { margin: 0; padding: 12px; overflow-x: auto; background: var(--bg); bor
   <section class="block">
     <h2>Report for NVIDIA</h2>
     <div class="panel stack">
+      <div class="field">
+        <label for="repNotes">Extra info for the report (not detectable by the page): CPU, Windows build, browser version, monitor connection type / resolution / refresh rate, G-SYNC on or off, power mode, clock-lock on or off</label>
+        <textarea id="repNotes" style="min-height:90px" placeholder="CPU: …&#10;Windows: …&#10;Browser version: …&#10;Monitor: DP / HDMI, 1920x1080 @ 60 Hz, G-SYNC off&#10;Power management: Normal, clock-lock inactive"></textarea>
+      </div>
       <textarea id="report" readonly aria-label="Report text"></textarea>
       <div class="row-actions">
         <button id="btnCopy" type="button">Copy report</button>
+        <button id="btnJson" type="button" class="alt">Download JSON (settings + raw frames)</button>
+        <button id="btnCsv" type="button" class="alt">Download CSV (frame times)</button>
         <span class="msg" id="copyMsg"></span>
       </div>
     </div>
@@ -753,7 +759,8 @@ pre.cmd { margin: 0; padding: 12px; overflow-x: auto; background: var(--bg); bor
         id: Date.now() + Math.floor(Math.random() * 1000), label: cfg.label, delayS: delayS,
         idleActual: Math.round(idleActual), level: cfg.level, speed: Math.round(speed), dur: cfg.dur,
         stageH: document.documentElement.scrollHeight, cards: info.cards, gpu: env.gpu, invalid: null,
-        browser: cfg.browser, browserDetected: detectedBrowser, ua: navigator.userAgent
+        browser: cfg.browser, browserDetected: detectedBrowser, ua: navigator.userAgent,
+        reps: cfg.reps, delayList: cfg.delays.join(','), screenRes: screen.width + 'x' + screen.height + '@' + window.devicePixelRatio + 'x'
       };
       if (m.hidden) run.invalid = 'tab was not active';
       else {
@@ -1061,8 +1068,25 @@ pre.cmd { margin: 0; padding: 12px; overflow-x: auto; background: var(--bg); bor
     L.push('Screen: ' + screen.width + 'x' + screen.height + ' @' + window.devicePixelRatio + 'x');
     L.push('Browser GPU (WebGL): ' + env.gpu);
     L.push('Loss = extra ms over a normal frame in the first 600 ms after scroll start, cold pass minus warm pass.');
+    var notes = ($('repNotes').value || '').trim();
+    if (notes) { L.push(''); L.push('--- System notes (entered by user) ---'); L.push(notes); }
     L.push('');
     var vr = shown();
+    if (vr.length) {
+      var LV = { 1: 'Light', 2: 'Medium', 3: 'Heavy', 4: 'Extreme' }, seen = {};
+      L.push('--- Exact test settings (per configuration) ---');
+      vr.forEach(function (r) {
+        var key = [r.label, rb(r), r.level, r.dur, r.speed, r.reps, r.delayList].join('|');
+        if (seen[key]) return; seen[key] = 1;
+        L.push('[' + r.label + ' / ' + bname(rb(r)) + '] heaviness=' + r.level + ' (' + (LV[r.level] || '?') + ') pass_duration=' + r.dur + 's scroll_speed=' + r.speed +
+          'px/s repeats=' + (r.reps == null ? 'n/a' : r.reps) + ' delays=' + (r.delayList || 'n/a') + 's blocks=' + r.cards + ' stage_height=' + Math.round(r.stageH) + 'px' +
+          ' measured_frame=' + r.ri + 'ms (~' + Math.round(1000 / r.ri) + ' Hz) screen=' + (r.screenRes || 'n/a') + ' webgl_gpu=' + r.gpu);
+        L.push('  UA: ' + (r.ua || 'n/a'));
+      });
+      L.push('Raw per-frame cold/warm intervals: use the "Download JSON" / "Download CSV" buttons and attach the files.');
+      L.push('');
+      L.push('--- Runs ---');
+    }
     if (!vr.length) { L.push('No valid runs yet.'); return L.join('\n'); }
     vr.forEach(function (r, i) {
       L.push('#' + (i + 1) + ' [' + r.label + ' / ' + bname(rb(r)) + '] idle=' + r.delayS + 's (actual ' + (r.idleActual / 1000).toFixed(1) + 's) scroll_start=' + r.wall +
@@ -1143,6 +1167,45 @@ pre.cmd { margin: 0; padding: 12px; overflow-x: auto; background: var(--bg); bor
   try {
     window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', function () { if (!running) { drawCharts(); drawLadder(); } });
   } catch (e) { /* older browsers */ }
+
+  function download(name, text, mime) {
+    var a = document.createElement('a'), u = URL.createObjectURL(new Blob([text], { type: mime }));
+    a.href = u; a.download = name; document.body.appendChild(a); a.click();
+    setTimeout(function () { document.body.removeChild(a); URL.revokeObjectURL(u); }, 500);
+  }
+  function stamp() { var d = new Date(); return d.getFullYear() + pad(d.getMonth() + 1) + pad(d.getDate()) + '-' + pad(d.getHours()) + pad(d.getMinutes()); }
+  $('btnJson').addEventListener('click', function () {
+    var vr = shown();
+    if (!vr.length) { els.copyMsg.textContent = 'No valid runs to export.'; return; }
+    var out = {
+      exported: fmtWall(Date.now()), note: ($('repNotes').value || '').trim(), userAgent: navigator.userAgent,
+      screen: screen.width + 'x' + screen.height + '@' + window.devicePixelRatio + 'x', webglGpu: env.gpu,
+      runs: vr.map(function (r, i) {
+        return { n: i + 1, label: r.label, browser: bname(rb(r)), settings: { heaviness: r.level, passDurationS: r.dur, scrollSpeedPxS: r.speed, repeats: r.reps, delaysS: r.delayList, delayThisRunS: r.delayS, idleActualMs: r.idleActual, blocks: r.cards, stageHeightPx: r.stageH, frameMs: r.ri },
+          scrollStart: r.wall, lossMs: r.loss, cold: r.cold, warm: r.warm };
+      })
+    };
+    download('idle-scroll-runs-' + stamp() + '.json', JSON.stringify(out, null, 1), 'application/json');
+    els.copyMsg.textContent = 'JSON downloaded (' + vr.length + ' runs).';
+  });
+  $('btnCsv').addEventListener('click', function () {
+    var vr = shown();
+    if (!vr.length) { els.copyMsg.textContent = 'No valid runs to export.'; return; }
+    var rows = ['run,label,browser,delay_s,scroll_start,heaviness,pass_s,speed_px_s,pass,frame_idx,t_ms_from_trigger,interval_ms'];
+    vr.forEach(function (r, i) {
+      ['cold', 'warm'].forEach(function (ps) {
+        var p = r[ps];
+        for (var j = 0; j < p.iv.length; j++) {
+          rows.push([i + 1, '"' + String(r.label).replace(/"/g, '""') + '"', bname(rb(r)), r.delayS, '"' + r.wall + '"', r.level, r.dur, r.speed, ps, j, p.t[j], p.iv[j]].join(','));
+        }
+      });
+    });
+    download('idle-scroll-frames-' + stamp() + '.csv', rows.join('\n'), 'text/csv');
+    els.copyMsg.textContent = 'CSV downloaded (' + (rows.length - 1) + ' frames).';
+  });
+  $('repNotes').addEventListener('input', function () { els.report.value = buildReport(); });
+  try { var sn = localStorage.getItem(LS_KEY + '-notes'); if (sn) $('repNotes').value = sn; } catch (e) { /* ignore */ }
+  $('repNotes').addEventListener('change', function () { try { localStorage.setItem(LS_KEY + '-notes', $('repNotes').value); } catch (e) { /* ignore */ } });
 
   els.browser.innerHTML = Object.keys(BROWSERS).map(function (k) { return '<option value="' + k + '">' + BROWSERS[k] + '</option>'; }).join('');
   els.browser.value = detectedBrowser;
